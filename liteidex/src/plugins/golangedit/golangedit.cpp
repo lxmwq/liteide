@@ -32,6 +32,7 @@
 #include "goaddtagsdialog.h"
 #include "goremovetagsdialog.h"
 #include "quickopenapi/quickopenapi.h"
+#include "liteapi/liteqt.h"
 
 #include <QMenu>
 #include <QToolBar>
@@ -172,7 +173,7 @@ GolangEdit::GolangEdit(LiteApi::IApplication *app, QObject *parent) :
 
 #if 0 // Source Query is superseded by gopls.
     connect(m_sourceQueryProcess,SIGNAL(finished(int,QProcess::ExitStatus)),this,SLOT(sourceQueryFinished(int,QProcess::ExitStatus)));
-    connect(m_sourceQueryProcess,SIGNAL(error(QProcess::ProcessError)),this,SLOT(sourcequeryError(QProcess::ProcessError)));
+    connect(m_sourceQueryProcess,SIGNAL(errorOccurred(QProcess::ProcessError)),this,SLOT(sourcequeryError(QProcess::ProcessError)));
 
     m_sourceQueryOutput = new TextOutput(m_liteApp,true);
     m_sourceQueryOutput->setLineWrap(false);
@@ -520,6 +521,11 @@ void GolangEdit::updateLink(const QTextCursor &cursor, const QPoint &pos, bool n
         if (!m_enableMouseNavigation) {
             return;
         }
+        QObject *gopls = m_liteApp->extension()->findObject("LiteApi.IGoplsService");
+        if (gopls && gopls->property("liteideGoplsActive").toBool()) {
+            m_lastLink.clear();
+            return;
+        }
     } else {
         if (!m_enableMouseUnderInfo) {
             return;
@@ -562,6 +568,7 @@ void GolangEdit::updateLink(const QTextCursor &cursor, const QPoint &pos, bool n
             m_lastLink.cursorPos = pos;
             m_lastLink.showTip = true;
             m_lastLink.showNav = nav;
+            m_lastLink.keepLastLine = nav;
             m_editor->showLink(m_lastLink);
             return;
         }
@@ -573,6 +580,7 @@ void GolangEdit::updateLink(const QTextCursor &cursor, const QPoint &pos, bool n
     m_lastLink.clear();
     m_lastLink.showTip = true;
     m_lastLink.showNav = nav;
+    m_lastLink.keepLastLine = nav;
     m_lastLink.linkTextStart = linkStart;
     m_lastLink.linkTextEnd = linkEnd;
     m_lastLink.cursorPos = pos;
@@ -597,7 +605,7 @@ void GolangEdit::updateLink(const QTextCursor &cursor, const QPoint &pos, bool n
         }
         args << "-b";
         args << "-pos";
-        args << QString("\"%1:%2\"").arg(info.fileName()).arg(offset);
+        args << QString("%1:%2").arg(info.fileName()).arg(offset);
         args << "-stdin";
         args << "-info";
         args << "-def";
@@ -710,7 +718,7 @@ void GolangEdit::editorJumpToDecl()
             args << tags;
         }
         args << "-pos";
-        args << QString("\"%1:%2\"").arg(info.fileName()).arg(offset);
+        args << QString("%1:%2").arg(info.fileName()).arg(offset);
         args << "-stdin";
         args << "-def";
         args << ".";
@@ -806,7 +814,7 @@ void GolangEdit::editorFindInfo()
             args << tags;
         }
         args << "-pos";
-        args << QString("\"%1:%2\"").arg(info.fileName()).arg(offset);
+        args << QString("%1:%2").arg(info.fileName()).arg(offset);
         args << "-stdin";
         args << "-info";
         args << "-def";
@@ -948,13 +956,13 @@ static QStringList FindSourceInfo(LiteApi::IApplication *app, const QString &fil
         QFile f(fileName);
         if (f.open(QFile::ReadOnly)) {
             QTextStream stream(&f);
-            stream.setCodec("utf-8");
+            qtSetUtf8Encoding(stream);
             int curLine = 0;
             QString text;
             while(!stream.atEnd() && (curLine < (line+maxLine)) ) {
                 text = stream.readLine();
                 if (curLine >= line) {
-                    lines.append(QString("%1 %2").arg(curLine,digits).arg(text));
+                    lines.append(QString("%1 %2").arg(curLine + 1,digits).arg(text));
                 }
                 curLine++;
             }
@@ -978,7 +986,7 @@ static QString FindSourceBlock(LiteApi::IApplication *app, const QString &fileNa
         QFile f(fileName);
         if (f.open(QFile::ReadOnly)) {
             QTextStream stream(&f);
-            stream.setCodec("utf-8");
+            qtSetUtf8Encoding(stream);
             int curLine = 0;
             QString text;
             while(!stream.atEnd()) {
@@ -1045,7 +1053,7 @@ void GolangEdit::findLinkFinish(int code,QProcess::ExitStatus)
                         m_lastLink.targetColumn = col-1;
                         if (!importExtra) {
                             m_lastLink.targetInfo = formatInfo(info[1]);
-                            m_lastLink.sourceInfo = QString("%1\n\n> %2:%3").arg(formatInfo(info[1])).arg(fileName).arg(line);
+                            m_lastLink.sourceInfo = formatInfo(info[1]);
                         }
                         if (m_lastLink.showNav) {
                             int n = 7;
@@ -1065,6 +1073,7 @@ void GolangEdit::findLinkFinish(int code,QProcess::ExitStatus)
                                 m_lastLink.sourceInfo += "\n\n";
                                 m_lastLink.sourceInfo += FindSourceInfo(m_liteApp,fileName,line-1,n).join("\n").replace("\t","    ");
                             }
+                            m_lastLink.sourceInfo += QString("\n\n> %1:%2").arg(fileName).arg(line);
                         }
                         // show doc
                         if (m_lastLink.showTip && (info.size() >= 3) ) {
